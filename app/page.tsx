@@ -1,4 +1,3 @@
-// ＃予約画面 (app/page.tsx)
 // app/page.tsx
 "use client";
 import { useState, useEffect } from "react";
@@ -11,13 +10,14 @@ type Ticket = {
   uniqueKey: string;
   shopId: string;
   shopName: string;
+  shopDepartment?: string; // 団体名
   time: string;
   timestamp: number;
   status: "reserved" | "waiting" | "ready" | "used" | "done";
   count: number;
   isQueue?: boolean;
   ticketId?: string;
-  peopleAhead?: number; // ここには「待ち組数」が入ります
+  peopleAhead?: number;
 };
 
 export default function Home() {
@@ -28,7 +28,6 @@ export default function Home() {
   const [isBanned, setIsBanned] = useState(false);
 
   // 申し込み画面用の状態
-  // maxPeopleを追加: そのチケットで選択できる最大人数
   const [draftBooking, setDraftBooking] = useState<{ time: string; remaining: number; mode: "slot" | "queue"; maxPeople: number } | null>(null);
   const [peopleCount, setPeopleCount] = useState<number>(1);
 
@@ -36,7 +35,6 @@ export default function Home() {
   useEffect(() => {
     signInAnonymously(auth).catch((e) => console.error(e));
     
-    // ユーザーIDの確保
     let storedId = localStorage.getItem("bunkasai_user_id");
     if (!storedId) {
       storedId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -44,7 +42,6 @@ export default function Home() {
     }
     setUserId(storedId);
 
-    // ユーザー情報の監視
     const userDocRef = doc(db, "users", storedId);
     getDoc(userDocRef).then((snap) => {
         if (!snap.exists()) {
@@ -59,16 +56,13 @@ export default function Home() {
         if (snap.exists()) setIsBanned(snap.data().isBanned === true);
     });
 
-    // アトラクション情報の監視
     const unsubAttractions = onSnapshot(collection(db, "attractions"), (snapshot) => {
       const shopData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setAttractions(shopData);
 
-      // チケット情報の構築
       const newMyTickets: Ticket[] = [];
       
       shopData.forEach((shop: any) => {
-        // A. 時間枠予約 (Slots) を探す
         if (shop.reservations) {
           shop.reservations.forEach((r: any) => {
             if (r.userId === storedId) {
@@ -76,6 +70,7 @@ export default function Home() {
                 uniqueKey: `slot_${shop.id}_${r.time}`,
                 shopId: shop.id,
                 shopName: shop.name,
+                shopDepartment: shop.department,
                 time: r.time,
                 timestamp: r.timestamp,
                 status: r.status,
@@ -86,39 +81,35 @@ export default function Home() {
           });
         }
 
-        // B. 順番待ち (Queue) を探す
         if (shop.queue) {
           shop.queue.forEach((q: any) => {
             if (q.userId === storedId) {
-              // ▼▼▼ 修正: 自分より前の「組数」を計算 ▼▼▼
               let groupsAhead = 0;
               if (q.status === 'waiting') {
                 const myNum = parseInt(q.ticketId || "999999");
-                // filterで抽出した後、lengthで「組数」を取得 (以前はreduceで人数合計していた)
                 groupsAhead = shop.queue.filter((other: any) => 
                   other.status === 'waiting' && parseInt(other.ticketId || "999999") < myNum
                 ).length;
               }
-              // ▲▲▲ 修正終わり ▲▲▲
 
               newMyTickets.push({
                 uniqueKey: `queue_${shop.id}_${q.ticketId}`,
                 shopId: shop.id,
                 shopName: shop.name,
+                shopDepartment: shop.department,
                 time: "順番待ち",
                 timestamp: q.createdAt?.toMillis() || Date.now(),
                 status: q.status,
                 count: q.count || 1,
                 isQueue: true,
                 ticketId: q.ticketId,
-                peopleAhead: groupsAhead // 変数名は peopleAhead のままですが、中身は組数
+                peopleAhead: groupsAhead
               });
             }
           });
         }
       });
 
-      // 並び替え
       newMyTickets.sort((a, b) => {
         if (a.status === 'ready' && b.status !== 'ready') return -1;
         if (a.status !== 'ready' && b.status === 'ready') return 1;
@@ -136,7 +127,6 @@ export default function Home() {
 
   const activeTickets = myTickets.filter(t => ["reserved", "waiting", "ready"].includes(t.status));
 
-  // BAN画面
   if (isBanned) {
       return (
           <div className="min-h-screen bg-red-900 text-white flex flex-col items-center justify-center p-4 text-center">
@@ -146,12 +136,10 @@ export default function Home() {
       );
   }
 
-  // ▼▼▼ 修正: 時間選択（予約）ロジック ▼▼▼
   const handleSelectTime = (shop: any, time: string) => {
     if (activeTickets.length >= 3) return alert("チケットは3枚までです。");
     if (activeTickets.some(t => t.shopId === shop.id && t.time === time)) return alert("既に予約済みです。");
     
-    // 定員の計算: groupLimit (枠ごとの定員・組) を使用
     const limitGroups = shop.groupLimit || 0; 
     const current = shop.slots[time] || 0;
     const remaining = limitGroups - current;
@@ -159,31 +147,23 @@ export default function Home() {
     if (remaining <= 0) return alert("満席です。");
     if (shop.isPaused) return alert("停止中です。");
     
-    // 1組の最大人数 (capacity) を取得
     const maxPeople = shop.capacity || 10;
 
     setPeopleCount(1);
-    // mode: slot, remaining: 残り組数, maxPeople: 選択可能な最大人数
     setDraftBooking({ time, remaining, mode: "slot", maxPeople });
   };
-  // ▲▲▲ 修正終わり ▲▲▲
 
-  // ▼▼▼ 修正: 順番待ち参加ボタン ▼▼▼
   const handleJoinQueue = (shop: any) => {
     if (activeTickets.length >= 3) return alert("チケットは3枚までです。");
     if (activeTickets.some(t => t.shopId === shop.id)) return alert("既にこの店に並んでいます。");
     if (shop.isPaused) return alert("停止中です。");
 
-    // 順番待ちでも「1組の最大人数」を適用
     const maxPeople = shop.capacity || 10;
 
     setPeopleCount(1);
-    // remainingは順番待ちでは表示に使わないため適当な値、maxPeopleを渡す
     setDraftBooking({ time: "順番待ち", remaining: 999, mode: "queue", maxPeople });
   };
-  // ▲▲▲ 修正終わり ▲▲▲
 
-  // 予約・発券の確定処理
   const handleConfirmBooking = async () => {
     if (!selectedShop || !draftBooking) return;
 
@@ -194,17 +174,12 @@ export default function Home() {
       const shopRef = doc(db, "attractions", selectedShop.id);
       
       if (draftBooking.mode === "slot") {
-        // 時間予約
-        // 注意: ここで increment(1) に変更（「組数」で枠を管理するため）
-        // もし「人数」で枠を減らしたい場合は increment(peopleCount) に戻してください
-        // 今回の要件「枠ごとの定員(組)」に従い、1予約につき1枠消費とします。
         const reservationData = { userId, time: draftBooking.time, timestamp, status: "reserved", count: peopleCount };
         await updateDoc(shopRef, { 
-            [`slots.${draftBooking.time}`]: increment(1), // 組数ベースで消費
+            [`slots.${draftBooking.time}`]: increment(1),
             reservations: arrayUnion(reservationData)
         });
       } else {
-        // 順番待ち
         const shopSnap = await getDoc(shopRef);
         const currentQueue = shopSnap.data()?.queue || [];
         
@@ -241,7 +216,6 @@ export default function Home() {
     }
   };
 
-  // キャンセル処理
   const handleCancel = async (ticket: Ticket) => {
     if (!confirm("キャンセルしますか？")) return;
     try {
@@ -258,7 +232,6 @@ export default function Home() {
       } else {
          const targetRes = shopData.reservations?.find((r: any) => r.userId === userId && r.time === ticket.time && r.timestamp === ticket.timestamp);
          if (targetRes) {
-           // 組数ベースで枠を戻すため increment(-1)
            await updateDoc(shopRef, { 
              [`slots.${ticket.time}`]: increment(-1),
              reservations: arrayRemove(targetRes)
@@ -269,7 +242,6 @@ export default function Home() {
     } catch (e) { alert("キャンセル失敗"); }
   };
 
-  // 入場処理
   const handleEnter = async (ticket: Ticket) => {
     const shop = attractions.find(s => s.id === ticket.shopId);
     if (!shop) return;
@@ -331,9 +303,12 @@ export default function Home() {
               <div key={t.uniqueKey} className={`${cardClass} p-4 rounded relative`}>
                 <div className="flex justify-between items-start mb-3">
                   <div>
-                      <h2 className="font-bold text-lg flex items-center gap-2">
+                      {t.shopDepartment && (
+                        <p className="text-xs font-bold text-gray-500 mb-0.5">{t.shopDepartment}</p>
+                      )}
+                      <h2 className="font-bold text-lg flex items-center gap-2 leading-tight">
                           {t.shopName}
-                          <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full border border-green-200">
+                          <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full border border-green-200 whitespace-nowrap">
                              {t.count}名
                           </span>
                       </h2>
@@ -355,7 +330,6 @@ export default function Home() {
                                 <p className="text-red-600 font-bold text-lg animate-bounce">🔔 呼び出し中です！</p>
                               ) : (
                                 <p className="text-blue-600 font-bold text-sm">
-                                  {/* ▼▼▼ 修正: 単位を「組待ち」に変更 ▼▼▼ */}
                                   あなたの前に <span className="text-xl text-blue-800">{t.peopleAhead}</span> 組待ち
                                 </p>
                               )}
@@ -374,7 +348,7 @@ export default function Home() {
                         : "bg-blue-600 text-white hover:bg-blue-500"
                       }`}
                   >
-                    {t.isQueue && !isReady ? "待機中..." : "入場する"}
+                    {t.isQueue && !isReady ? "待機中..." : "入場する (スタッフ用)"}
                   </button>
                   <button onClick={() => handleCancel(t)} className="px-4 text-red-500 border border-red-200 rounded-lg text-xs hover:bg-red-50">
                     キャンセル
@@ -402,9 +376,11 @@ export default function Home() {
                       {shop.isQueueMode && <span className="bg-orange-100 text-orange-700 border-orange-200 border text-[10px] px-2 py-0.5 rounded font-bold">順番待ち制</span>}
                       {shop.isPaused && <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded">受付停止中</span>}
                   </div>
+                  {shop.department && (
+                    <p className="text-xs text-blue-600 font-bold mb-0.5">{shop.department}</p>
+                  )}
                   <h3 className="font-bold text-lg leading-tight truncate text-gray-800 mb-1">{shop.name}</h3>
                   <div className="text-xs text-gray-400">
-                      {/* 一覧表示の待ち組数: ここも人数合計ではなくlengthで組数を表示 */}
                       {shop.isQueueMode 
                         ? `待ち: ${shop.queue?.filter((q:any)=>q.status==='waiting').length || 0}組` 
                         : `予約可`}
@@ -418,9 +394,29 @@ export default function Home() {
         // 詳細・予約画面
         <div className="bg-white rounded-xl shadow-sm border overflow-hidden pb-10">
             <div className="relative">
-               <button onClick={() => { setSelectedShop(null); setDraftBooking(null); }} className="absolute top-2 left-2 bg-black/60 text-white px-3 py-1 rounded-full text-sm backdrop-blur-sm z-10">← 戻る</button>
-               <div className="p-4 pt-12 border-b bg-gray-50">
-                   <h2 className="text-2xl font-bold">{selectedShop.name}</h2>
+               {/* ★追加: 詳細ヘッダー画像 */}
+               {selectedShop.imageUrl && (
+                 <div className="w-full h-56 bg-gray-200">
+                   <img 
+                     src={selectedShop.imageUrl} 
+                     alt={selectedShop.name} 
+                     className="w-full h-full object-cover" 
+                   />
+                 </div>
+               )}
+
+               <button 
+                 onClick={() => { setSelectedShop(null); setDraftBooking(null); }} 
+                 className="absolute top-3 left-3 bg-black/50 text-white px-4 py-2 rounded-full text-sm backdrop-blur-md z-10 hover:bg-black/70 transition"
+               >
+                 ← 戻る
+               </button>
+
+               <div className="p-5 border-b bg-gray-50">
+                   {selectedShop.department && (
+                     <p className="text-sm font-bold text-blue-600 mb-1">{selectedShop.department}</p>
+                   )}
+                   <h2 className="text-2xl font-bold leading-tight text-gray-900">{selectedShop.name}</h2>
                </div>
             </div>
 
@@ -443,7 +439,6 @@ export default function Home() {
                                    <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 min-w-[100px]">
                                       <p className="text-xs text-orange-600">待ち組数</p>
                                       <p className="text-3xl font-bold text-orange-900">
-                                        {/* 待ち組数を表示 (length) */}
                                         {selectedShop.queue?.filter((q:any)=>q.status==='waiting').length || 0}
                                         <span className="text-sm font-normal ml-1">組</span>
                                       </p>
@@ -460,14 +455,10 @@ export default function Home() {
                         ) : (
                            <div className="grid grid-cols-3 gap-3">
                               {Object.entries(selectedShop.slots || {}).sort().map(([time, count]: any) => {
-                                 // ▼▼▼ 修正: ここも定員(組)と最大人数(人)を区別 ▼▼▼
-                                 const limitGroups = selectedShop.groupLimit || 0; // 枠の定員
-                                 // capacity (1組あたりの人数) はここでは枠計算に使わない
-                                 
+                                 const limitGroups = selectedShop.groupLimit || 0; 
                                  const isFull = count >= limitGroups;
                                  const remaining = limitGroups - count;
                                  const isBooked = activeTickets.some(t => t.shopId === selectedShop.id && t.time === time);
-                                 // ▲▲▲ 修正終わり ▲▲▲
                                  
                                  return (
                                      <button 
@@ -498,7 +489,8 @@ export default function Home() {
             </div>
             
             <div className="p-6">
-              <p className="text-center font-bold mb-4">{selectedShop.name}</p>
+              <p className="text-center text-sm font-bold text-gray-500 mb-1">{selectedShop.department}</p>
+              <p className="text-center font-bold text-xl mb-4">{selectedShop.name}</p>
               
               <label className="block text-sm font-bold text-gray-700 mb-2">
                   人数を選択してください
@@ -508,11 +500,9 @@ export default function Home() {
                   onChange={(e) => setPeopleCount(Number(e.target.value))}
                   className="w-full text-lg p-3 border-2 border-gray-200 rounded-lg mb-6"
               >
-                  {/* ▼▼▼ 修正: 選択肢を 1組の最大人数 (maxPeople) に基づいて生成 ▼▼▼ */}
                   {[...Array(draftBooking.maxPeople)].map((_, i) => (
                       <option key={i+1} value={i+1}>{i+1}名</option>
                   ))}
-                  {/* ▲▲▲ 修正終わり ▲▲▲ */}
               </select>
 
               <div className="flex gap-3">
