@@ -1,4 +1,4 @@
-// ＃裏管理システム
+// ＃ユーザー管理画面 (app/admin/super/Hack/page.tsx)
 "use client";
 import { useState, useEffect, useMemo } from "react";
 import { db, auth } from "../../../../firebase"; 
@@ -50,8 +50,12 @@ export default function AdminPage() {
   const [targetStudentId, setTargetStudentId] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [studentReservations, setStudentReservations] = useState<any[]>([]);
+  
+  // ★変更点: 強制予約入力用
   const [addShopId, setAddShopId] = useState("");
   const [addTime, setAddTime] = useState("");
+  const [addCount, setAddCount] = useState(1); // ★追加: 人数選択用
+
   const [showVenueConfig, setShowVenueConfig] = useState(false); 
   const [selectedConfigShopId, setSelectedConfigShopId] = useState<string | null>(null);
   const [configInputUserId, setConfigInputUserId] = useState("");
@@ -122,7 +126,7 @@ export default function AdminPage() {
   // =================================================================
   //  ヘルパー関数
   // =================================================================
-   
+    
   const getUserNickname = (uid: string) => {
       const u = users.find(user => user.id === uid);
       return u && u.nickname ? u.nickname : "";
@@ -131,7 +135,7 @@ export default function AdminPage() {
   // =================================================================
   //  機能群 1: ユーザーDB管理
   // =================================================================
-   
+    
   const handleUpdateNickname = async (uid: string, newNick: string) => {
     await updateDoc(doc(db, "users", uid), { nickname: newNick });
   };
@@ -144,7 +148,7 @@ export default function AdminPage() {
     const confirmMsg = user.isBanned 
       ? `ID「${user.id}」の凍結(BAN)を解除しますか？` 
       : `ID「${user.id}」を凍結(操作禁止)にしますか？`;
-    
+     
     if (!confirm(confirmMsg)) return;
     await updateDoc(doc(db, "users", user.id), { isBanned: !user.isBanned });
   };
@@ -227,7 +231,6 @@ export default function AdminPage() {
       });
   };
 
-  // ★修正: フラグ保存処理を追加
   const toggleListMode = async (type: "guest" | "student") => {
       if (!selectedConfigShopId) return;
       const targetShop = attractions.find(s => s.id === selectedConfigShopId);
@@ -241,12 +244,9 @@ export default function AdminPage() {
       
       const updates: any = { [field]: newMode };
       
-      // Guest用フラグ
       if (type === "guest") {
           updates.isRestricted = (newMode === "white");
       }
-      
-      // Student(Admin)用フラグ（★ここが修正点）
       if (type === "student") {
           updates.isAdminRestricted = (newMode === "white");
       }
@@ -305,6 +305,7 @@ export default function AdminPage() {
       const shop = attractions.find(s => s.id === res.shopId);
       if(!shop) return;
       const otherRes = shop.reservations.filter((r: any) => r.timestamp !== res.timestamp);
+      // スロットの解放（※ここでは1予約につき1スロット戻すと仮定）
       const updatedSlots = { ...shop.slots, [res.time]: Math.max(0, (shop.slots[res.time] || 1) - 1) };
       await updateDoc(doc(db, "attractions", res.shopId), { reservations: otherRes, slots: updatedSlots });
       setIsModalOpen(false); fetchStudentData();
@@ -314,7 +315,16 @@ export default function AdminPage() {
       if(!addShopId || !addTime) return alert("会場と時間を選択してください");
       const shop = attractions.find(s => s.id === addShopId);
       if(!shop) return;
-      const newRes = { userId: targetStudentId, timestamp: Date.now(), time: addTime, status: "reserved" };
+      
+      // ★変更点: 人数(count)をデータに含める
+      const newRes = { 
+          userId: targetStudentId, 
+          timestamp: Date.now(), 
+          time: addTime, 
+          status: "reserved",
+          count: Number(addCount) // 人数を追加
+      };
+
       const updatedSlots = { ...shop.slots, [addTime]: (shop.slots?.[addTime] || 0) + 1 };
       await updateDoc(doc(db, "attractions", addShopId), {
           reservations: [...(shop.reservations || []), newRes], slots: updatedSlots
@@ -357,7 +367,7 @@ export default function AdminPage() {
 
 
       {/* ========================================================================= */}
-      {/* タブ 1: 会場・予約管理 (日本語化)                                     */}
+      {/* タブ 1: 会場・予約管理                                                 */}
       {/* ========================================================================= */}
       {activeTab === "venues" && (
         <div className="flex flex-1 overflow-hidden">
@@ -497,7 +507,7 @@ export default function AdminPage() {
 
 
       {/* ========================================================================= */}
-      {/* タブ 2: ユーザーデータベース管理 (日本語化 & バグ修正済)                 */}
+      {/* タブ 2: ユーザーデータベース管理                                       */}
       {/* ========================================================================= */}
       {activeTab === "users" && (
           <div className="flex-1 overflow-y-auto p-6 bg-gray-900">
@@ -573,55 +583,83 @@ export default function AdminPage() {
       )}
 
 
-      {/* ================= モーダル (予約詳細) ================= */}
+      {/* ================= モーダル (予約詳細・修正済) ================= */}
       {isModalOpen && (
           <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4 animate-fade-in">
               <div className="bg-gray-900 border border-green-600 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg shadow-2xl p-6">
                   <div className="flex justify-between items-center mb-6">
                       <div>
-                          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                              予約状況: <span className="text-yellow-400 font-mono text-2xl">{targetStudentId}</span>
-                          </h2>
-                          <p className="text-gray-400 text-sm mt-1">{getUserNickname(targetStudentId)}</p>
+                          <h2 className="text-xl font-bold text-white">予約詳細</h2>
+                          <p className="text-green-500 font-mono">{targetStudentId}</p>
                       </div>
                       <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-white text-2xl">×</button>
                   </div>
+                  
+                  {/* 予約リスト表示 */}
+                  <div className="mb-8">
+                      <h3 className="font-bold text-gray-400 mb-2 border-b border-gray-700 pb-1">現在の予約 ({studentReservations.length}件)</h3>
+                      {studentReservations.length === 0 ? (
+                          <p className="text-gray-600">予約はありません</p>
+                      ) : (
+                          <ul className="space-y-3">
+                              {studentReservations.map((res, i) => (
+                                  <li key={i} className="bg-black border border-gray-700 p-3 rounded flex justify-between items-center">
+                                      <div>
+                                          <div className="text-yellow-500 text-sm">{res.shopName}</div>
+                                          <div className="text-white text-lg font-bold">
+                                              {res.time} 
+                                              {/* ★変更点: 時間の右隣に人数を表示 */}
+                                              <span className="ml-2 text-sm text-blue-300">({res.count || 1}名)</span>
+                                          </div>
+                                          <div className={`text-xs ${res.status === 'used' ? 'text-gray-500' : 'text-green-400'}`}>
+                                              {res.status === 'used' ? "使用済み" : "予約中"}
+                                          </div>
+                                      </div>
+                                      <div className="flex flex-col gap-1">
+                                          <button onClick={() => forceToggleStatus(res, res.status === 'used' ? 'reserved' : 'used')} className="text-xs bg-gray-800 px-2 py-1 rounded text-white border border-gray-600">
+                                              {res.status === 'used' ? "未使用に戻す" : "使用済みにする"}
+                                          </button>
+                                          <button onClick={() => forceDeleteReservation(res)} className="text-xs bg-red-900/50 text-red-300 px-2 py-1 rounded border border-red-800">
+                                              削除
+                                          </button>
+                                      </div>
+                                  </li>
+                              ))}
+                          </ul>
+                      )}
+                  </div>
 
-                  <div className="bg-black p-4 rounded border border-gray-700 mb-6">
-                      <h3 className="text-green-500 font-bold mb-2 text-sm uppercase">Manual Reserve (強制予約)</h3>
-                      <div className="flex gap-2 mb-2">
-                          <select className="bg-gray-800 text-white p-2 rounded flex-1 text-sm border border-gray-600" onChange={e => setAddShopId(e.target.value)} value={addShopId}>
+                  {/* 強制予約システム (修正版) */}
+                  <div className="bg-blue-900/10 border border-blue-800 p-4 rounded">
+                      <h3 className="font-bold text-blue-400 mb-2">強制予約システム (割り込み)</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                          <select className="bg-black border border-gray-600 text-white p-2 rounded" value={addShopId} onChange={e => setAddShopId(e.target.value)}>
                               <option value="">会場を選択...</option>
                               {attractions.map(shop => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
                           </select>
-                          <select className="bg-gray-800 text-white p-2 rounded w-32 text-sm border border-gray-600" onChange={e => setAddTime(e.target.value)} value={addTime}>
-                              <option value="">時間...</option>
+                          <select className="bg-black border border-gray-600 text-white p-2 rounded" value={addTime} onChange={e => setAddTime(e.target.value)} disabled={!addShopId}>
+                              <option value="">時間を選択...</option>
                               {targetShopTimes.map(t => <option key={t} value={t}>{t}</option>)}
                           </select>
                       </div>
-                      <button onClick={forceAddReservation} className="w-full bg-green-900/50 hover:bg-green-700 text-green-200 border border-green-700 py-2 rounded text-sm font-bold">
-                          ＋ 強制予約を実行
-                      </button>
-                  </div>
-
-                  <div className="space-y-2">
-                      {studentReservations.length === 0 && <p className="text-gray-500 text-center py-4">予約データはありません</p>}
-                      {studentReservations.map((res: any) => (
-                          <div key={res.timestamp} className="bg-gray-800 p-3 rounded flex justify-between items-center border border-gray-700">
-                              <div>
-                                  <div className="text-xs text-gray-400 mb-1">{res.shopName}</div>
-                                  <div className="text-lg font-bold text-white font-mono">{res.time}</div>
-                              </div>
-                              <div className="flex gap-2">
-                                  {res.status !== 'used' ? (
-                                      <button onClick={() => forceToggleStatus(res, "used")} className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1 rounded">入場済にする</button>
-                                  ) : (
-                                      <button onClick={() => forceToggleStatus(res, "reserved")} className="bg-gray-600 hover:bg-gray-500 text-white text-xs px-3 py-1 rounded">未入場の状態に戻す</button>
-                                  )}
-                                  <button onClick={() => forceDeleteReservation(res)} className="bg-red-900 hover:bg-red-700 text-red-200 border border-red-700 text-xs px-3 py-1 rounded">削除</button>
-                              </div>
+                      
+                      <div className="flex gap-3 items-end">
+                          {/* ★変更点: 人数選択用の入力欄を追加 */}
+                          <div className="flex-1">
+                            <label className="text-xs text-gray-400 block mb-1">人数</label>
+                            <input 
+                                type="number" 
+                                min="1" 
+                                className="w-full bg-black border border-gray-600 text-white p-2 rounded"
+                                value={addCount}
+                                onChange={(e) => setAddCount(Number(e.target.value))}
+                            />
                           </div>
-                      ))}
+
+                          <button onClick={forceAddReservation} className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2 rounded h-[42px]">
+                             強制追加
+                          </button>
+                      </div>
                   </div>
               </div>
           </div>
